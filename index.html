@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Echo Realms - 50 Livelli</title>
+<style>
+  * {
+    margin:0; padding:0; box-sizing: border-box; user-select:none;
+  }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background:#111; color:#eee; display:flex; flex-direction: column; align-items:center;
+  }
+  #gameCanvas {
+    background:#222; border-radius:12px; box-shadow:0 0 20px #0ff;
+    display:block; margin: 20px auto;
+    max-width: 95vw;
+  }
+  #ui {
+    width: 800px; max-width: 95vw; display: flex; justify-content: space-between; padding: 10px 20px;
+    font-size: 18px; user-select:none;
+  }
+  #message {
+    font-size: 28px; font-weight: 700; margin-top: 10px; height: 36px; text-align:center;
+  }
+  #btnNextLevel {
+    margin-top: 15px; padding: 10px 25px; font-size: 20px; border:none;
+    background: #0ff; color: #111; border-radius: 8px; cursor: pointer;
+    user-select:none;
+  }
+  #btnNextLevel:disabled {
+    background: #044; cursor: default;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div>Livello: <span id="level">1</span>/50</div>
+  <div>Punteggio: <span id="score">0</span></div>
+  <div>Vite: <span id="lives">3</span></div>
+</div>
+
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+
+<div id="message"></div>
+<button id="btnNextLevel" disabled>Prossimo Livello</button>
+
+<script>
+(() => {
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const levelEl = document.getElementById("level");
+  const scoreEl = document.getElementById("score");
+  const livesEl = document.getElementById("lives");
+  const messageEl = document.getElementById("message");
+  const btnNext = document.getElementById("btnNextLevel");
+
+  let currentLevel = 1;
+  let score = 0;
+  let lives = 3;
+
+  // States: playing, levelComplete, gameOver
+  let gameState = "playing";
+
+  // Player properties
+  const player = {
+    x: w / 2,
+    y: h - 60,
+    width: 40,
+    height: 40,
+    color: "#0ff",
+    speed: 7,
+    bullets: [],
+    canShoot: true,
+    shootCooldown: 300, // ms
+    lastShot: 0,
+  };
+
+  // Enemies container
+  let enemies = [];
+
+  // Level configs: For 50 levels, gradually harder
+  // Each level changes background, enemy count, speed, and mechanic
+  const levels = [];
+
+  // Generate 50 levels with different properties and colors
+  for (let i=1; i<=50; i++) {
+    levels.push({
+      bgColor: `hsl(${(i*7)%360}, 60%, 15%)`,
+      enemyCount: Math.min(5 + i, 35),
+      enemySpeed: 1 + i*0.15,
+      enemyHealth: Math.min(1 + Math.floor(i/5), 10),
+      bulletSpeed: 10 + i*0.1,
+      mechanic: i%5, // 0..4 different mechanics cycling
+    });
+  }
+
+  // Utility funcs
+  function rectsCollide(r1, r2) {
+    return !(r2.x > r1.x + r1.width || 
+             r2.x + r2.width < r1.x || 
+             r2.y > r1.y + r1.height ||
+             r2.y + r2.height < r1.y);
+  }
+
+  // Create enemies at top randomly
+  function spawnEnemies(level) {
+    enemies = [];
+    const conf = levels[level-1];
+    for(let i=0; i<conf.enemyCount; i++) {
+      enemies.push({
+        x: Math.random() * (w-40),
+        y: -Math.random() * 600 - 40,
+        width: 30,
+        height: 30,
+        color: `hsl(${Math.random()*360}, 70%, 50%)`,
+        speed: conf.enemySpeed * (0.7 + Math.random()*0.6),
+        health: conf.enemyHealth,
+        maxHealth: conf.enemyHealth,
+      });
+    }
+  }
+
+  // Draw player
+  function drawPlayer() {
+    ctx.fillStyle = player.color;
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+  }
+
+  // Draw bullets
+  function drawBullets() {
+    ctx.fillStyle = "#0ff";
+    player.bullets.forEach(b => {
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+    });
+  }
+
+  // Draw enemies with health bar
+  function drawEnemies() {
+    enemies.forEach(e => {
+      ctx.fillStyle = e.color;
+      ctx.fillRect(e.x, e.y, e.width, e.height);
+      // Health bar
+      ctx.fillStyle = "#f00";
+      ctx.fillRect(e.x, e.y - 8, e.width, 4);
+      ctx.fillStyle = "#0f0";
+      ctx.fillRect(e.x, e.y - 8, e.width * (e.health / e.maxHealth), 4);
+    });
+  }
+
+  // Draw background
+  function drawBackground() {
+    ctx.fillStyle = levels[currentLevel-1].bgColor;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // Update game objects
+  function update(delta) {
+    if (gameState !== "playing") return;
+
+    // Move bullets
+    player.bullets = player.bullets.filter(b => {
+      b.y -= b.speed * delta;
+      return b.y + b.height > 0;
+    });
+
+    // Move enemies
+    enemies.forEach(e => {
+      e.y += e.speed * delta;
+
+      // Check if enemy hits player bottom line
+      if (e.y + e.height >= player.y) {
+        lives--;
+        updateUI();
+        enemies = enemies.filter(en => en !== e);
+        if (lives <= 0) {
+          gameOver();
+        }
+      }
+    });
+
+    // Bullet-enemy collisions
+    player.bullets.forEach(b => {
+      enemies.forEach(e => {
+        if (rectsCollide(b, e)) {
+          e.health -= damagePerBullet();
+          b.hit = true;
+          if (e.health <= 0) {
+            score += 100;
+            coins += 50;
+            enemies = enemies.filter(en => en !== e);
+          }
+        }
+      });
+    });
+    player.bullets = player.bullets.filter(b => !b.hit);
+
+    // Win condition: all enemies dead
+    if (enemies.length === 0) {
+      levelComplete();
+    }
+  }
+
+  function damagePerBullet() {
+    return 1 + Math.floor(currentLevel / 10);
+  }
+
+  // Draw everything
+  function draw() {
+    drawBackground();
+    drawPlayer();
+    drawBullets();
+    drawEnemies();
+  }
+
+  // UI update
+  function updateUI() {
+    levelEl.textContent = currentLevel;
+    scoreEl.textContent = score;
+    livesEl.textContent = lives;
+    coinsEl.textContent = coins;
+  }
+
+  // Game loop
+  let lastTime = 0;
+  function gameLoop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const delta = (timestamp - lastTime) / 16.67; // normalize to ~60fps
+
+    if (gameState === "playing") {
+      update(delta);
+      draw();
+    }
+    lastTime = timestamp;
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Player input: mouse/keyboard for left-right move & shoot
+  document.addEventListener("mousemove", e => {
+    if (gameState !== "playing") return;
+    const rect = canvas.getBoundingClientRect();
+    let mouseX = e.clientX - rect.left;
+    player.x = Math.min(w - player.width, Math.max(0, mouseX - player.width/2));
+  });
+
+  document.addEventListener("click", e => {
+    if (gameState !== "playing") return;
+    shoot();
+  });
+
+  function shoot() {
+    let now = performance.now();
+    if (!player.canShoot) {
+      if (now - player.lastShot < player.shootCooldown) return;
+      else player.canShoot = true;
+    }
+    if (player.canShoot) {
+      player.bullets.push({
+        x: player.x + player.width/2 - 4,
+        y: player.y,
+        width: 8,
+        height: 16,
+        speed: 12,
+        hit: false,
+      });
+      player.lastShot = now;
+      player.canShoot = false;
+    }
+  }
+
+  // Level complete
+  function levelComplete() {
+    gameState = "levelComplete";
+    messageEl.textContent = `Livello ${currentLevel} completato! Clicca “Prossimo Livello”`;
+    btnNext.disabled = false;
+  }
+
+  // Game over
+  function gameOver() {
+    gameState = "gameOver";
+    messageEl.textContent = `Game Over! Punteggio finale: ${score}`;
+    btnNext.disabled = true;
+  }
+
+  // Next level button
+  btnNext.addEventListener("click", () => {
+    if (gameState !== "levelComplete") return;
+    currentLevel++;
+    if (currentLevel > 50) {
+      messageEl.textContent = "Complimenti! Hai completato tutti i 50 livelli!";
+      btnNext.disabled = true;
+      return;
+    }
+    messageEl.textContent = "";
+    spawnEnemies(currentLevel);
+    updateUI();
+    gameState = "playing";
+    btnNext.disabled = true;
+  });
+
+  // Start game
+  function startGame() {
+    lives = 3;
+    score = 0;
+    currentLevel = 1;
+    spawnEnemies(currentLevel);
+    updateUI();
+    messageEl.textContent = "";
+    btnNext.disabled = true;
+    gameState = "playing";
+    requestAnimationFrame(gameLoop);
+  }
+
+  startGame();
+})();
+</script>
+
+</body>
+</html>
