@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Echo Realms - Gioco Infinito</title>
+<style>
+  * {
+    margin:0; padding:0; box-sizing: border-box; user-select:none;
+  }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background:#111; color:#eee; display:flex; flex-direction: column; align-items:center;
+  }
+  #gameCanvas {
+    background:#222; border-radius:12px; box-shadow:0 0 20px #0ff;
+    display:block; margin: 20px auto;
+    max-width: 95vw;
+  }
+  #ui {
+    width: 800px; max-width: 95vw; display: flex; justify-content: space-between; padding: 10px 20px;
+    font-size: 18px; user-select:none;
+  }
+  #message {
+    font-size: 28px; font-weight: 700; margin-top: 10px; height: 36px; text-align:center;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div>Punteggio: <span id="score">0</span></div>
+  <div>Vite: <span id="lives">3</span></div>
+</div>
+
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+
+<div id="message"></div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const scoreEl = document.getElementById("score");
+  const livesEl = document.getElementById("lives");
+  const messageEl = document.getElementById("message");
+
+  let score = 0;
+  let lives = 3;
+  let gameState = "playing";
+
+  const player = {
+    x: w / 2,
+    y: h - 60,
+    width: 40,
+    height: 40,
+    color: "#0ff",
+    bullets: [],
+    canShoot: true,
+    shootCooldown: 300,
+    lastShot: 0,
+  };
+
+  let enemies = [];
+  let enemySpawnTimer = 0;
+  let enemySpawnInterval = 1500; // start spawning every 1.5 sec
+  let enemySpeedBase = 1;
+  let enemyHealthBase = 2;
+
+  function rectsCollide(r1, r2) {
+    return !(r2.x > r1.x + r1.width || 
+             r2.x + r2.width < r1.x || 
+             r2.y > r1.y + r1.height ||
+             r2.y + r2.height < r1.y);
+  }
+
+  function spawnEnemy() {
+    enemies.push({
+      x: Math.random() * (w - 40),
+      y: -40,
+      width: 30,
+      height: 30,
+      color: `hsl(${Math.random()*360}, 70%, 50%)`,
+      speed: enemySpeedBase + Math.random() * 0.8,
+      health: enemyHealthBase,
+      maxHealth: enemyHealthBase,
+    });
+  }
+
+  function drawPlayer() {
+    ctx.fillStyle = player.color;
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+  }
+
+  function drawBullets() {
+    ctx.fillStyle = "#0ff";
+    player.bullets.forEach(b => {
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+    });
+  }
+
+  function drawEnemies() {
+    enemies.forEach(e => {
+      ctx.fillStyle = e.color;
+      ctx.fillRect(e.x, e.y, e.width, e.height);
+      ctx.fillStyle = "#f00";
+      ctx.fillRect(e.x, e.y - 6, e.width, 4);
+      ctx.fillStyle = "#0f0";
+      ctx.fillRect(e.x, e.y - 6, e.width * (e.health / e.maxHealth), 4);
+    });
+  }
+
+  function drawBackground() {
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  function update(delta) {
+    if (gameState !== "playing") return;
+
+    // Spawn enemies over time, accelerate spawn rate
+    enemySpawnTimer += delta * 16.67;
+    if (enemySpawnTimer > enemySpawnInterval) {
+      spawnEnemy();
+      enemySpawnTimer = 0;
+      enemySpawnInterval = Math.max(400, enemySpawnInterval * 0.98); // faster over time
+      enemySpeedBase += 0.005;
+      enemyHealthBase += 0.002;
+    }
+
+    // Move bullets
+    player.bullets = player.bullets.filter(b => {
+      b.y -= b.speed * delta;
+      return b.y + b.height > 0;
+    });
+
+    // Move enemies
+    enemies.forEach(e => {
+      e.y += e.speed * delta;
+
+      if (e.y + e.height >= player.y) {
+        lives--;
+        updateUI();
+        enemies = enemies.filter(en => en !== e);
+        if (lives <= 0) {
+          gameOver();
+        }
+      }
+    });
+
+    // Bullet collisions
+    player.bullets.forEach(b => {
+      enemies.forEach(e => {
+        if (rectsCollide(b, e)) {
+          e.health -= damagePerBullet();
+          b.hit = true;
+          if (e.health <= 0) {
+            score += 100;
+            enemies = enemies.filter(en => en !== e);
+          }
+        }
+      });
+    });
+    player.bullets = player.bullets.filter(b => !b.hit);
+  }
+
+  function damagePerBullet() {
+    return 1;
+  }
+
+  function draw() {
+    drawBackground();
+    drawPlayer();
+    drawBullets();
+    drawEnemies();
+  }
+
+  function updateUI() {
+    scoreEl.textContent = score;
+    livesEl.textContent = lives;
+  }
+
+  function gameOver() {
+    gameState = "gameOver";
+    messageEl.textContent = `Game Over! Punteggio finale: ${score}`;
+  }
+
+  let lastTime = 0;
+  function gameLoop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const delta = (timestamp - lastTime) / 16.67;
+
+    if (gameState === "playing") {
+      update(delta);
+      draw();
+    }
+    lastTime = timestamp;
+    requestAnimationFrame(gameLoop);
+  }
+
+  document.addEventListener("mousemove", e => {
+    if (gameState !== "playing") return;
+    const rect = canvas.getBoundingClientRect();
+    let mouseX = e.clientX - rect.left;
+    player.x = Math.min(w - player.width, Math.max(0, mouseX - player.width/2));
+  });
+
+  document.addEventListener("click", e => {
+    if (gameState !== "playing") return;
+    shoot();
+  });
+
+  function shoot() {
+    let now = performance.now();
+    if (!player.canShoot) {
+      if (now - player.lastShot < player.shootCooldown) return;
+      else player.canShoot = true;
+    }
+    if (player.canShoot) {
+      player.bullets.push({
+        x: player.x + player.width/2 - 4,
+        y: player.y,
+        width: 8,
+        height: 16,
+        speed: 12,
+        hit: false,
+      });
+      player.lastShot = now;
+      player.canShoot = false;
+    }
+  }
+
+  // Start game
+  function startGame() {
+    lives = 3;
+    score = 0;
+    enemySpawnInterval = 1500;
+    enemySpeedBase = 1;
+    enemyHealthBase = 2;
+    enemies = [];
+    player.bullets = [];
+    messageEl.textContent = "";
+    updateUI();
+    gameState = "playing";
+    requestAnimationFrame(gameLoop);
+  }
+
+  startGame();
+
+})();
+</script>
+
+</body>
+</html>
